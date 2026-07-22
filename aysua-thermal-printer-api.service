@@ -1,0 +1,18 @@
+[Unit]
+Description=Aysua ESC/POS Bluetooth Thermal Printer API
+After=bluetooth.service network.target
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/aysua-thermal-printer-api
+ExecStart=/usr/bin/python3 /opt/aysua-thermal-printer-api/aysua_thermal_printer_api.py
+Restart=always
+RestartSec=2
+Environment=THERMAL_API_HOST=0.0.0.0
+Environment=THERMAL_API_PORT=8096
+Environment=THERMAL_CONFIG_PATH=/opt/aysua-thermal-printer-api/config.json
+
+[Install]
+WantedBy=multi-user.target
