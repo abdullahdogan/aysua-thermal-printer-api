@@ -28,7 +28,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.2.0"
+API_VERSION = "1.2.1"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -40,6 +40,7 @@ DEFAULT_CONFIG = {
     "paper_width": "58mm",
     "chars_per_line": 32,
     "codepage": "cp857",
+    "turkish_ascii": True,
     "copies": 1,
     "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
 }
@@ -105,6 +106,7 @@ def load_config():
     config["chars_per_line"] = int(config.get("chars_per_line") or 32)
     config["rfcomm_channel"] = int(config.get("rfcomm_channel") or 1)
     config["copies"] = max(1, int(config.get("copies") or 1))
+    config["turkish_ascii"] = bool(config.get("turkish_ascii", True))
     return config
 
 
@@ -120,7 +122,7 @@ def save_config(updates):
             value = str(value or "0000").strip()[:16]
         if key in {"chars_per_line", "rfcomm_channel", "copies"}:
             value = int(value)
-        if key == "enabled":
+        if key in {"enabled", "turkish_ascii"}:
             value = bool(value)
         config[key] = value
     ensure_config_dir()
@@ -409,11 +411,36 @@ def prepare_printer(config=None):
     return True
 
 
+TURKISH_ASCII_MAP = str.maketrans({
+    "ç": "c", "Ç": "C",
+    "ğ": "g", "Ğ": "G",
+    "ı": "i", "İ": "I",
+    "ö": "o", "Ö": "O",
+    "ş": "s", "Ş": "S",
+    "ü": "u", "Ü": "U",
+    "â": "a", "Â": "A",
+    "î": "i", "Î": "I",
+    "û": "u", "Û": "U",
+    "°": " derece",
+    "–": "-", "—": "-", "−": "-",
+    "“": "\"", "”": "\"", "’": "'", "‘": "'",
+    "…": "...",
+})
+
+
+def normalize_for_thermal_text(text, config):
+    value = str(text or "")
+    if config.get("turkish_ascii", True):
+        value = value.translate(TURKISH_ASCII_MAP)
+    return value
+
+
 def escpos_bytes_from_text(text, config):
     encoding = config.get("codepage") or "cp857"
     chars = max(24, min(48, int(config.get("chars_per_line") or 32)))
     lines = []
-    for raw in (text or "").splitlines():
+    normalized_text = normalize_for_thermal_text(text, config)
+    for raw in (normalized_text or "").splitlines():
         line = raw.rstrip()
         if len(line) <= chars:
             lines.append(line)

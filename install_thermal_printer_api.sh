@@ -28,6 +28,7 @@ if [ ! -f "${INSTALL_DIR}/config.json" ]; then
   "paper_width": "58mm",
   "chars_per_line": 32,
   "codepage": "cp857",
+  "turkish_ascii": true,
   "copies": 1,
   "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans"
 }

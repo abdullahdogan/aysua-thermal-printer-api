@@ -52,6 +52,7 @@ Kurulumdan sonra:
   "paper_width": "58mm",
   "chars_per_line": 32,
   "codepage": "cp857",
+  "turkish_ascii": true,
   "copies": 1,
   "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans"
 }
@@ -70,6 +71,8 @@ curl -X POST http://127.0.0.1:8096/api/thermal/test_print
 ```
 
 PDF rapor içeriğiyle termal çıktı almak için servis `pdftotext` kullanır. Kurulum scripti bunun için `poppler-utils` paketini yükler.
+
+Türkçe karakterlerde bozuk sembol çıkmaması için varsayılan olarak `turkish_ascii=true` kullanılır. Bu mod `ş, ı, ğ, ü, ö, ç` karakterlerini termal yazıcıda güvenli ASCII karşılıklarına çevirir.
 
 ```bash
 curl -X POST http://127.0.0.1:8096/api/thermal/print_report \
