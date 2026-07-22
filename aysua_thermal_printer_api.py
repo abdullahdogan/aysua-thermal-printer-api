@@ -18,6 +18,8 @@ import subprocess
 import sys
 import time
 import select
+import tempfile
+import urllib.request
 
 
 HOST = os.getenv("THERMAL_API_HOST", "0.0.0.0")
@@ -26,7 +28,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.1.1"
+API_VERSION = "1.2.0"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -39,6 +41,7 @@ DEFAULT_CONFIG = {
     "chars_per_line": 32,
     "codepage": "cp857",
     "copies": 1,
+    "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
 }
 
 
@@ -433,9 +436,118 @@ def center(text, width):
     return (" " * pad) + text
 
 
+def safe_filename(name):
+    raw = os.path.basename(str(name or "").replace("\\", "/"))
+    if not raw or raw in {".", ".."}:
+        return ""
+    return raw
+
+
+def extract_pdf_text_with_pdftotext(pdf_path):
+    if shutil.which("pdftotext") is None:
+        return ""
+    code, out, err = run_cmd(["pdftotext", "-layout", pdf_path, "-"], timeout=20)
+    if code != 0:
+        return ""
+    return out
+
+
+def read_local_pdf_text(file_name, config):
+    name = safe_filename(file_name)
+    if not name:
+        return ""
+    base_dir = str(config.get("saved_scans_dir") or "").strip()
+    candidates = []
+    if base_dir:
+        candidates.append(os.path.join(base_dir, name))
+    candidates.extend([
+        os.path.join("/home/pmroot/AysuaSpect/files/saved_scans", name),
+        os.path.join("/home/pmroot/AysuaSpect/web/files/saved_scans", name),
+        os.path.join("/opt/AysuaSpect/files/saved_scans", name),
+        os.path.join("/opt/aysua/files/saved_scans", name),
+    ])
+    for path in candidates:
+        if path and os.path.exists(path) and os.path.isfile(path):
+            text = extract_pdf_text_with_pdftotext(path)
+            if text:
+                return text
+    return ""
+
+
+def download_pdf_text(url):
+    if not url:
+        return ""
+    parsed = str(url).strip()
+    if not parsed.startswith(("http://", "https://")):
+        return ""
+    with tempfile.NamedTemporaryFile(prefix="aysua-report-", suffix=".pdf", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        req = urllib.request.Request(parsed, headers={"User-Agent": "AysuaThermalPrinterAPI/1.2"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read(8 * 1024 * 1024)
+        with open(tmp_path, "wb") as fh:
+            fh.write(data)
+        return extract_pdf_text_with_pdftotext(tmp_path)
+    except Exception:
+        return ""
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def clean_pdf_text_for_receipt(text):
+    lines = []
+    seen_blank = False
+    for raw in (text or "").replace("\r", "\n").splitlines():
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not line:
+            if not seen_blank and lines:
+                lines.append("")
+            seen_blank = True
+            continue
+        seen_blank = False
+        # Graph axis tick dumps can make receipts noisy. Keep report text compact.
+        if re.fullmatch(r"[-+0-9., ]{12,}", line):
+            continue
+        lines.append(line)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def extract_report_text_from_payload(payload, config):
+    explicit = payload.get("pdf_text")
+    if explicit:
+        return clean_pdf_text_for_receipt(str(explicit))
+
+    for url in payload.get("pdf_urls") or []:
+        text = download_pdf_text(url)
+        if text:
+            return clean_pdf_text_for_receipt(text)
+
+    files = payload.get("files")
+    if not isinstance(files, list):
+        files = [payload.get("file")] if payload.get("file") else []
+    for file_name in files:
+        text = read_local_pdf_text(file_name, config)
+        if text:
+            return clean_pdf_text_for_receipt(text)
+    return ""
+
+
 def build_report_text(payload, config):
     chars = max(24, min(48, int(config.get("chars_per_line") or 32)))
     sep = "-" * chars
+    pdf_text = extract_report_text_from_payload(payload, config)
+    if pdf_text:
+        lines = [center(payload.get("title") or "AYSUA SPECT", chars), sep]
+        lines.extend(pdf_text.splitlines())
+        lines.append(sep)
+        return "\n".join(lines)
+
     files = payload.get("files")
     if not isinstance(files, list):
         files = [payload.get("file")] if payload.get("file") else []

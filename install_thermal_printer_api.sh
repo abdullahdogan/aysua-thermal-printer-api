@@ -8,7 +8,7 @@ SERVICE_FILE="/etc/systemd/system/aysua-thermal-printer-api.service"
 echo "[1/5] Installing Linux packages"
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update
-  sudo apt-get install -y bluez python3
+  sudo apt-get install -y bluez python3 poppler-utils
 fi
 
 echo "[2/5] Copying service files"
@@ -28,7 +28,8 @@ if [ ! -f "${INSTALL_DIR}/config.json" ]; then
   "paper_width": "58mm",
   "chars_per_line": 32,
   "codepage": "cp857",
-  "copies": 1
+  "copies": 1,
+  "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans"
 }
 JSON
 fi

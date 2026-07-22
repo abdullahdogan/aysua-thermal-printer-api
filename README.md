@@ -52,7 +52,8 @@ Kurulumdan sonra:
   "paper_width": "58mm",
   "chars_per_line": 32,
   "codepage": "cp857",
-  "copies": 1
+  "copies": 1,
+  "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans"
 }
 ```
 
@@ -66,6 +67,14 @@ curl -X POST http://127.0.0.1:8096/api/thermal/settings \
   -d '{"enabled":true,"mac_address":"XX:XX:XX:XX:XX:XX","pin":"0000"}'
 curl -X POST http://127.0.0.1:8096/api/thermal/pair
 curl -X POST http://127.0.0.1:8096/api/thermal/test_print
+```
+
+PDF rapor içeriğiyle termal çıktı almak için servis `pdftotext` kullanır. Kurulum scripti bunun için `poppler-utils` paketini yükler.
+
+```bash
+curl -X POST http://127.0.0.1:8096/api/thermal/print_report \
+  -H 'Content-Type: application/json' \
+  -d '{"files":["scan.pdf"],"pdf_urls":["http://127.0.0.1:8080/files/saved_scans/scan.pdf"]}'
 ```
 
 ## Linux notları
