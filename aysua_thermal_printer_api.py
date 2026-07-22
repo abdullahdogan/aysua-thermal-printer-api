@@ -26,7 +26,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.1.0"
+API_VERSION = "1.1.1"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -172,6 +172,7 @@ def bluetoothctl_expect_pair(mac, pin="0000", timeout=55):
     sent_pin = False
     paired = False
     failed_reason = ""
+    pair_attempts = 0
     start = time.time()
 
     def write_line(line):
@@ -202,19 +203,31 @@ def bluetoothctl_expect_pair(mac, pin="0000", timeout=55):
 
         for command in [
             "power on",
+            "scan on",
             "agent KeyboardDisplay",
             "default-agent",
-            f"remove {mac}",
-            f"pair {mac}",
         ]:
             write_line(command)
             time.sleep(0.35)
             read_available()
 
+        time.sleep(2.0)
+        read_available()
+        write_line(f"pair {mac}")
+        pair_attempts += 1
+
         while time.time() - start < timeout:
             text = read_available(0.35)
             all_text = clean_output("\n".join(output))
             lowered = all_text.lower()
+
+            if "not available" in lowered and pair_attempts < 4:
+                failed_reason = ""
+                time.sleep(2.0)
+                read_available()
+                write_line(f"pair {mac}")
+                pair_attempts += 1
+                continue
 
             if not sent_pin and (
                 "enter pin" in lowered
@@ -241,6 +254,12 @@ def bluetoothctl_expect_pair(mac, pin="0000", timeout=55):
             failed_match = re.search(r"failed to pair:[^\n]+", all_text, flags=re.IGNORECASE)
             if failed_match:
                 failed_reason = failed_match.group(0)
+                if "not available" in failed_reason.lower() and pair_attempts < 4:
+                    time.sleep(2.0)
+                    read_available()
+                    write_line(f"pair {mac}")
+                    pair_attempts += 1
+                    continue
                 break
 
             if proc.poll() is not None:
@@ -254,6 +273,9 @@ def bluetoothctl_expect_pair(mac, pin="0000", timeout=55):
         read_available()
         write_line(f"connect {mac}")
         time.sleep(2.0)
+        read_available()
+        write_line("scan off")
+        time.sleep(0.2)
         read_available()
         write_line("quit")
         time.sleep(0.2)
@@ -279,6 +301,11 @@ def bluetoothctl_expect_pair(mac, pin="0000", timeout=55):
             raise ThermalError(
                 "Bluetooth agent could not be registered. "
                 "Restart bluetooth service and try again: sudo systemctl restart bluetooth"
+            )
+        if "not available" in final_output.lower():
+            raise ThermalError(
+                "Bluetooth printer is not available for pairing. "
+                "Keep the printer on and in pairing mode, then scan devices and try Pair again."
             )
         raise ThermalError(failed_reason or final_output or "Bluetooth pairing failed")
     return {"ok": True, "message": "Paired", "info": info, "raw": final_output}
