@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
+import select
 
 
 HOST = os.getenv("THERMAL_API_HOST", "0.0.0.0")
@@ -44,6 +45,13 @@ class ThermalError(Exception):
     pass
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def clean_output(text):
+    return ANSI_RE.sub("", text or "").replace("\r", "").strip()
+
+
 def run_cmd(args, timeout=15, check=False):
     try:
         proc = subprocess.run(
@@ -54,7 +62,7 @@ def run_cmd(args, timeout=15, check=False):
             timeout=timeout,
             check=check,
         )
-        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+        return proc.returncode, clean_output(proc.stdout), clean_output(proc.stderr)
     except subprocess.TimeoutExpired as exc:
         raise ThermalError(f"Command timed out: {' '.join(args)}") from exc
     except FileNotFoundError as exc:
@@ -129,7 +137,150 @@ def bluetoothctl_script(commands, timeout=30):
         text=True,
         timeout=timeout,
     )
-    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    return proc.returncode, clean_output(proc.stdout), clean_output(proc.stderr)
+
+
+def bluetoothctl_expect_pair(mac, pin="0000", timeout=55):
+    """Pair through bluetoothctl using a pseudo-terminal.
+
+    Some BlueZ/bluetoothctl builds do not handle agent prompts correctly when
+    stdin is a plain pipe. A PTY keeps bluetoothctl in interactive mode so
+    PIN/passkey prompts can be answered.
+    """
+    if os.name != "posix":
+        raise ThermalError("Interactive Bluetooth pairing is only supported on Linux")
+    if shutil.which("bluetoothctl") is None:
+        raise ThermalError("bluetoothctl not installed")
+
+    import pty
+
+    mac = normalize_mac(mac)
+    pin = str(pin or "0000").strip()
+    master_fd, slave_fd = pty.openpty()
+    proc = subprocess.Popen(
+        ["bluetoothctl"],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        close_fds=True,
+        text=False,
+    )
+    os.close(slave_fd)
+
+    output = []
+    sent_pin = False
+    paired = False
+    failed_reason = ""
+    start = time.time()
+
+    def write_line(line):
+        os.write(master_fd, (line + "\n").encode("utf-8", errors="replace"))
+        output.append(f"> {line}")
+
+    def read_available(wait=0.2):
+        chunk_text = ""
+        while True:
+            ready, _, _ = select.select([master_fd], [], [], wait)
+            if not ready:
+                break
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            decoded = chunk.decode("utf-8", errors="replace")
+            output.append(decoded)
+            chunk_text += decoded
+            wait = 0
+        return clean_output(chunk_text)
+
+    try:
+        time.sleep(0.4)
+        read_available()
+
+        for command in [
+            "power on",
+            "agent KeyboardDisplay",
+            "default-agent",
+            f"remove {mac}",
+            f"pair {mac}",
+        ]:
+            write_line(command)
+            time.sleep(0.35)
+            read_available()
+
+        while time.time() - start < timeout:
+            text = read_available(0.35)
+            all_text = clean_output("\n".join(output))
+            lowered = all_text.lower()
+
+            if not sent_pin and (
+                "enter pin" in lowered
+                or "pin code" in lowered
+                or "passkey" in lowered
+                or "request pin" in lowered
+            ):
+                write_line(pin)
+                sent_pin = True
+                continue
+
+            if "confirm passkey" in lowered or "authorize service" in lowered:
+                write_line("yes")
+                continue
+
+            if (
+                "pairing successful" in lowered
+                or "alreadyexists" in lowered
+                or "already exists" in lowered
+            ):
+                paired = True
+                break
+
+            failed_match = re.search(r"failed to pair:[^\n]+", all_text, flags=re.IGNORECASE)
+            if failed_match:
+                failed_reason = failed_match.group(0)
+                break
+
+            if proc.poll() is not None:
+                break
+
+            if text:
+                continue
+
+        write_line(f"trust {mac}")
+        time.sleep(0.25)
+        read_available()
+        write_line(f"connect {mac}")
+        time.sleep(2.0)
+        read_available()
+        write_line("quit")
+        time.sleep(0.2)
+        read_available()
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    final_output = clean_output("\n".join(output))
+    info = bluetooth_info(mac)
+    if info.get("paired"):
+        paired = True
+    if not paired:
+        if "Failed to register agent object" in final_output:
+            raise ThermalError(
+                "Bluetooth agent could not be registered. "
+                "Restart bluetooth service and try again: sudo systemctl restart bluetooth"
+            )
+        raise ThermalError(failed_reason or final_output or "Bluetooth pairing failed")
+    return {"ok": True, "message": "Paired", "info": info, "raw": final_output}
 
 
 def list_devices(scan_seconds=7):
@@ -154,7 +305,7 @@ def list_devices(scan_seconds=7):
         proc.kill()
         raise
     if code != 0:
-        raise ThermalError(err or out or "Bluetooth device list failed")
+        raise ThermalError(clean_output(err or out) or "Bluetooth device list failed")
     devices = []
     for line in out.splitlines():
         match = re.match(r"Device\s+(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+(.+)$", line.strip())
@@ -179,23 +330,7 @@ def bluetooth_info(mac):
 
 def pair_and_trust(mac, pin="0000"):
     mac = normalize_mac(mac)
-    pin = str(pin or "0000").strip()
-    commands = [
-        "power on",
-        "agent KeyboardOnly",
-        "default-agent",
-        f"pair {mac}",
-        pin,
-        f"trust {mac}",
-        f"connect {mac}",
-        "quit",
-    ]
-    code, out, err = bluetoothctl_script(commands, timeout=45)
-    text = "\n".join([out, err]).strip()
-    info = bluetooth_info(mac)
-    if not (info["paired"] or "Pairing successful" in text or "AlreadyExists" in text):
-        raise ThermalError(text or "Bluetooth pairing failed")
-    return {"ok": True, "message": "Paired", "info": info, "raw": text}
+    return bluetoothctl_expect_pair(mac, pin, timeout=55)
 
 
 def release_rfcomm(device_path):
