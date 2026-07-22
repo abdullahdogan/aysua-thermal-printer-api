@@ -26,6 +26,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
+API_VERSION = "1.1.0"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -461,6 +462,7 @@ def status_payload():
     device_path = config.get("device_path") or "/dev/rfcomm0"
     return {
         "ok": True,
+        "version": API_VERSION,
         "enabled": bool(config.get("enabled")),
         "configured": bool(config.get("mac_address")),
         "printer_name": config.get("printer_name"),
@@ -487,7 +489,7 @@ def parse_json_body(handler):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AysuaThermalPrinterAPI/1.0"
+    server_version = f"AysuaThermalPrinterAPI/{API_VERSION}"
 
     def log_message(self, fmt, *args):
         print("%s - %s" % (self.address_string(), fmt % args), flush=True)
@@ -515,6 +517,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/thermal/status":
                 self._send(200, status_payload())
+            elif path == "/api/thermal/version":
+                self._send(200, {"ok": True, "version": API_VERSION})
             elif path == "/api/thermal/settings":
                 config = load_config()
                 self._send(200, {"ok": True, "settings": config})
