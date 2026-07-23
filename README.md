@@ -54,7 +54,10 @@ Kurulumdan sonra:
   "codepage": "cp857",
   "turkish_ascii": true,
   "copies": 1,
-  "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans"
+  "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
+  "receipt_title": "Yakut Dedektörü",
+  "print_qr": true,
+  "signature_space": true
 }
 ```
 
@@ -73,6 +76,13 @@ curl -X POST http://127.0.0.1:8096/api/thermal/test_print
 PDF rapor içeriğiyle termal çıktı almak için servis `pdftotext` kullanır. Kurulum scripti bunun için `poppler-utils` paketini yükler.
 
 Türkçe karakterlerde bozuk sembol çıkmaması için varsayılan olarak `turkish_ascii=true` kullanılır. Bu mod `ş, ı, ğ, ü, ö, ç` karakterlerini termal yazıcıda güvenli ASCII karşılıklarına çevirir.
+
+Termal fiş şablonu:
+
+- Başlık varsayılanı `Yakut Dedektörü`
+- PDF rapor metni
+- QR kod (`pdf_urls` içindeki rapor linki veya dosya adı)
+- Personel imzası alanı
 
 ```bash
 curl -X POST http://127.0.0.1:8096/api/thermal/print_report \

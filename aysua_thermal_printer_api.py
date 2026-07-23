@@ -28,7 +28,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.2.1"
+API_VERSION = "1.3.0"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -43,6 +43,9 @@ DEFAULT_CONFIG = {
     "turkish_ascii": True,
     "copies": 1,
     "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
+    "receipt_title": "Yakut Dedektörü",
+    "print_qr": True,
+    "signature_space": True,
 }
 
 
@@ -122,7 +125,7 @@ def save_config(updates):
             value = str(value or "0000").strip()[:16]
         if key in {"chars_per_line", "rfcomm_channel", "copies"}:
             value = int(value)
-        if key in {"enabled", "turkish_ascii"}:
+        if key in {"enabled", "turkish_ascii", "print_qr", "signature_space"}:
             value = bool(value)
         config[key] = value
     ensure_config_dir()
@@ -435,7 +438,7 @@ def normalize_for_thermal_text(text, config):
     return value
 
 
-def escpos_bytes_from_text(text, config):
+def escpos_text_body_bytes(text, config):
     encoding = config.get("codepage") or "cp857"
     chars = max(24, min(48, int(config.get("chars_per_line") or 32)))
     lines = []
@@ -448,11 +451,44 @@ def escpos_bytes_from_text(text, config):
             while line:
                 lines.append(line[:chars])
                 line = line[chars:]
-    body = "\n".join(lines).encode(encoding, errors="replace")
+    return "\n".join(lines).encode(encoding, errors="replace")
+
+
+def escpos_qr_bytes(qr_data, size=5):
+    value = str(qr_data or "").strip()
+    if not value:
+        return b""
+    data = value.encode("utf-8", errors="replace")
+    store_len = len(data) + 3
+    p_l = store_len % 256
+    p_h = store_len // 256
+    size = max(3, min(8, int(size or 5)))
+    return b"".join([
+        b"\n",
+        b"\x1b\x61\x01",                              # center
+        b"\x1d\x28\x6b\x04\x00\x31\x41\x32\x00",      # QR model 2
+        b"\x1d\x28\x6b\x03\x00\x31\x43" + bytes([size]),
+        b"\x1d\x28\x6b\x03\x00\x31\x45\x31",          # error correction M
+        b"\x1d\x28\x6b" + bytes([p_l, p_h]) + b"\x31\x50\x30" + data,
+        b"\x1d\x28\x6b\x03\x00\x31\x51\x30",          # print QR
+        b"\n",
+        b"\x1b\x61\x00",                              # left
+    ])
+
+
+def escpos_bytes_from_text(text, config, qr_data="", footer_text=""):
     init = b"\x1b\x40"
     align_left = b"\x1b\x61\x00"
+    body = escpos_text_body_bytes(text, config)
+    footer = escpos_text_body_bytes(footer_text, config) if footer_text else b""
     feed_cut = b"\n\n\n\x1d\x56\x00"
-    return init + align_left + body + feed_cut
+    parts = [init, align_left, body]
+    if qr_data:
+        parts.append(escpos_qr_bytes(qr_data, config.get("qr_size", 5)))
+    if footer:
+        parts.extend([b"\n", align_left, footer])
+    parts.append(feed_cut)
+    return b"".join(parts)
 
 
 def center(text, width):
@@ -565,12 +601,52 @@ def extract_report_text_from_payload(payload, config):
     return ""
 
 
+def receipt_title(payload, config):
+    return config.get("receipt_title") or payload.get("title") or "Yakut Dedektörü"
+
+
+def qr_data_from_payload(payload):
+    explicit = str(payload.get("qr_data") or "").strip()
+    if explicit:
+        return explicit
+    for url in payload.get("pdf_urls") or []:
+        value = str(url or "").strip()
+        if value and "127.0.0.1" not in value and "localhost" not in value:
+            return value
+    for url in payload.get("pdf_urls") or []:
+        value = str(url or "").strip()
+        if value:
+            return value
+    files = payload.get("files")
+    if not isinstance(files, list):
+        files = [payload.get("file")] if payload.get("file") else []
+    for file_name in files:
+        value = str(file_name or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def signature_footer(config):
+    if not config.get("signature_space", True):
+        return ""
+    chars = max(24, min(48, int(config.get("chars_per_line") or 32)))
+    label = "Personel Imzasi:"
+    return "\n".join([
+        "-" * chars,
+        label,
+        "",
+        "",
+        "_" * min(chars, 24),
+    ])
+
+
 def build_report_text(payload, config):
     chars = max(24, min(48, int(config.get("chars_per_line") or 32)))
     sep = "-" * chars
     pdf_text = extract_report_text_from_payload(payload, config)
     if pdf_text:
-        lines = [center(payload.get("title") or "AYSUA SPECT", chars), sep]
+        lines = [center(receipt_title(payload, config), chars), sep]
         lines.extend(pdf_text.splitlines())
         lines.append(sep)
         return "\n".join(lines)
@@ -578,7 +654,7 @@ def build_report_text(payload, config):
     files = payload.get("files")
     if not isinstance(files, list):
         files = [payload.get("file")] if payload.get("file") else []
-    title = payload.get("title") or "AYSUA SPECT"
+    title = receipt_title(payload, config)
     user = payload.get("user") or ""
     mode = payload.get("mode") or ""
     result = payload.get("result") or ""
@@ -601,9 +677,9 @@ def build_report_text(payload, config):
     return "\n".join(lines)
 
 
-def write_to_printer(text, config):
+def write_to_printer(text, config, qr_data="", footer_text=""):
     prepare_printer(config)
-    data = escpos_bytes_from_text(text, config)
+    data = escpos_bytes_from_text(text, config, qr_data=qr_data, footer_text=footer_text)
     path = config.get("device_path") or "/dev/rfcomm0"
     try:
         with open(path, "wb", buffering=0) as fh:
@@ -720,7 +796,7 @@ class Handler(BaseHTTPRequestHandler):
                 config = load_config()
                 chars = int(config.get("chars_per_line") or 32)
                 text = "\n".join([
-                    center("AYSUA SPECT", chars),
+                    center(config.get("receipt_title") or "Yakut Dedektörü", chars),
                     "-" * chars,
                     "PT-210 ESC/POS test",
                     time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -731,7 +807,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/thermal/print_report":
                 config = load_config()
                 text = build_report_text(payload, config)
-                write_to_printer(text, config)
+                qr_data = qr_data_from_payload(payload) if config.get("print_qr", True) else ""
+                footer = signature_footer(config)
+                write_to_printer(text, config, qr_data=qr_data, footer_text=footer)
                 self._send(200, {"ok": True, "message": "Report sent"})
             else:
                 self._send(404, {"ok": False, "error": "Not found"})

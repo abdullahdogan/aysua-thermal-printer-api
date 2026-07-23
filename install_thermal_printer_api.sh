@@ -30,7 +30,10 @@ if [ ! -f "${INSTALL_DIR}/config.json" ]; then
   "codepage": "cp857",
   "turkish_ascii": true,
   "copies": 1,
-  "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans"
+  "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
+  "receipt_title": "Yakut Dedektörü",
+  "print_qr": true,
+  "signature_space": true
 }
 JSON
 fi
