@@ -8,7 +8,7 @@ SERVICE_FILE="/etc/systemd/system/aysua-thermal-printer-api.service"
 echo "[1/5] Installing Linux packages"
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update
-  sudo apt-get install -y bluez python3 poppler-utils
+  sudo apt-get install -y bluez python3 poppler-utils python3-qrcode python3-pil
 fi
 
 echo "[2/5] Copying service files"
@@ -35,6 +35,8 @@ if [ ! -f "${INSTALL_DIR}/config.json" ]; then
   "print_qr": true,
   "qr_mode": "text",
   "qr_max_chars": 900,
+  "qr_render": "image",
+  "qr_image_pixels": 192,
   "signature_space": true
 }
 JSON

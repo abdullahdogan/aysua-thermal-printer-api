@@ -28,7 +28,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.4.0"
+API_VERSION = "1.4.1"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -47,6 +47,8 @@ DEFAULT_CONFIG = {
     "print_qr": True,
     "qr_mode": "text",
     "qr_max_chars": 900,
+    "qr_render": "image",
+    "qr_image_pixels": 192,
     "signature_space": True,
 }
 
@@ -112,6 +114,7 @@ def load_config():
     config["rfcomm_channel"] = int(config.get("rfcomm_channel") or 1)
     config["copies"] = max(1, int(config.get("copies") or 1))
     config["turkish_ascii"] = bool(config.get("turkish_ascii", True))
+    config["qr_image_pixels"] = max(120, min(320, int(config.get("qr_image_pixels") or 192)))
     return config
 
 
@@ -129,6 +132,8 @@ def save_config(updates):
             value = int(value)
         if key == "qr_max_chars":
             value = max(120, min(2500, int(value)))
+        if key == "qr_image_pixels":
+            value = max(120, min(320, int(value)))
         if key in {"enabled", "turkish_ascii", "print_qr", "signature_space"}:
             value = bool(value)
         config[key] = value
@@ -480,6 +485,58 @@ def escpos_qr_bytes(qr_data, size=5):
     ])
 
 
+def escpos_qr_image_bytes(qr_data, config):
+    value = str(qr_data or "").strip()
+    if not value:
+        return b""
+    try:
+        import qrcode
+        from PIL import Image
+    except Exception:
+        return escpos_qr_bytes(value, config.get("qr_size", 5))
+
+    target = max(120, min(320, int(config.get("qr_image_pixels") or 192)))
+    chars = max(24, min(48, int(config.get("chars_per_line") or 32)))
+    paper_pixels = 384 if chars <= 32 else 576
+
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=3,
+    )
+    qr.add_data(value)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white").convert("1")
+    img = img.resize((target, target), Image.Resampling.NEAREST)
+
+    width = img.width
+    height = img.height
+    left_pad = max(0, (paper_pixels - width) // 2)
+    total_width = width + left_pad
+    width_bytes = (total_width + 7) // 8
+    raster = bytearray(width_bytes * height)
+    px = img.load()
+
+    for y in range(height):
+        for x in range(width):
+            if px[x, y] == 0:
+                tx = x + left_pad
+                idx = y * width_bytes + (tx // 8)
+                raster[idx] |= 0x80 >> (tx % 8)
+
+    x_l = width_bytes % 256
+    x_h = width_bytes // 256
+    y_l = height % 256
+    y_h = height // 256
+    return b"".join([
+        b"\n",
+        b"\x1b\x61\x00",
+        b"\x1d\x76\x30\x00" + bytes([x_l, x_h, y_l, y_h]) + bytes(raster),
+        b"\n",
+    ])
+
+
 def escpos_bytes_from_text(text, config, qr_data="", footer_text=""):
     init = b"\x1b\x40"
     align_left = b"\x1b\x61\x00"
@@ -488,7 +545,10 @@ def escpos_bytes_from_text(text, config, qr_data="", footer_text=""):
     feed_cut = b"\n\n\n\x1d\x56\x00"
     parts = [init, align_left, body]
     if qr_data:
-        parts.append(escpos_qr_bytes(qr_data, config.get("qr_size", 5)))
+        if str(config.get("qr_render") or "image").strip().lower() == "native":
+            parts.append(escpos_qr_bytes(qr_data, config.get("qr_size", 5)))
+        else:
+            parts.append(escpos_qr_image_bytes(qr_data, config))
     if footer:
         parts.extend([b"\n", align_left, footer])
     parts.append(feed_cut)

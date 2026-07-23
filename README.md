@@ -59,6 +59,8 @@ Kurulumdan sonra:
   "print_qr": true,
   "qr_mode": "text",
   "qr_max_chars": 900,
+  "qr_render": "image",
+  "qr_image_pixels": 192,
   "signature_space": true
 }
 ```
@@ -85,6 +87,8 @@ Termal fiş şablonu:
 - PDF rapor metni
 - QR kod (`qr_mode=text` ise rapor özeti metni, `qr_mode=link` ise rapor linki veya dosya adı)
 - Personel imzası alanı
+
+QR baskısı varsayılan olarak `qr_render=image` ile küçük raster görsel olarak gönderilir. Bu yöntem, native ESC/POS QR komutunu desteklemeyen PT-210 türevlerinde daha uyumludur. İstenirse config içinde `qr_render=native` yapılabilir.
 
 ```bash
 curl -X POST http://127.0.0.1:8096/api/thermal/print_report \
