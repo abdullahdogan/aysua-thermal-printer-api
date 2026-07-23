@@ -57,6 +57,8 @@ Kurulumdan sonra:
   "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
   "receipt_title": "Yakut Dedektörü",
   "print_qr": true,
+  "qr_mode": "text",
+  "qr_max_chars": 900,
   "signature_space": true
 }
 ```
@@ -81,7 +83,7 @@ Termal fiş şablonu:
 
 - Başlık varsayılanı `Yakut Dedektörü`
 - PDF rapor metni
-- QR kod (`pdf_urls` içindeki rapor linki veya dosya adı)
+- QR kod (`qr_mode=text` ise rapor özeti metni, `qr_mode=link` ise rapor linki veya dosya adı)
 - Personel imzası alanı
 
 ```bash

@@ -28,7 +28,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.3.0"
+API_VERSION = "1.4.0"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -45,6 +45,8 @@ DEFAULT_CONFIG = {
     "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
     "receipt_title": "Yakut Dedektörü",
     "print_qr": True,
+    "qr_mode": "text",
+    "qr_max_chars": 900,
     "signature_space": True,
 }
 
@@ -125,6 +127,8 @@ def save_config(updates):
             value = str(value or "0000").strip()[:16]
         if key in {"chars_per_line", "rfcomm_channel", "copies"}:
             value = int(value)
+        if key == "qr_max_chars":
+            value = max(120, min(2500, int(value)))
         if key in {"enabled", "turkish_ascii", "print_qr", "signature_space"}:
             value = bool(value)
         config[key] = value
@@ -627,6 +631,25 @@ def qr_data_from_payload(payload):
     return ""
 
 
+def qr_data_for_receipt(payload, config, receipt_text):
+    if not config.get("print_qr", True):
+        return ""
+    mode = str(config.get("qr_mode") or "text").strip().lower()
+    if mode == "link":
+        return qr_data_from_payload(payload)
+
+    title = receipt_title(payload, config)
+    text = clean_pdf_text_for_receipt(receipt_text or "")
+    # Do not duplicate the title too aggressively if it already exists.
+    if title and title not in text:
+        text = f"{title}\n{text}".strip()
+    text = normalize_for_thermal_text(text, config)
+    max_chars = max(120, min(2500, int(config.get("qr_max_chars") or 900)))
+    if len(text) > max_chars:
+        text = text[: max_chars - 3].rstrip() + "..."
+    return text
+
+
 def signature_footer(config):
     if not config.get("signature_space", True):
         return ""
@@ -807,7 +830,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/thermal/print_report":
                 config = load_config()
                 text = build_report_text(payload, config)
-                qr_data = qr_data_from_payload(payload) if config.get("print_qr", True) else ""
+                qr_data = qr_data_for_receipt(payload, config, text)
                 footer = signature_footer(config)
                 write_to_printer(text, config, qr_data=qr_data, footer_text=footer)
                 self._send(200, {"ok": True, "message": "Report sent"})
