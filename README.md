@@ -57,7 +57,7 @@ Kurulumdan sonra:
   "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
   "receipt_title": "Yakut Dedektörü",
   "print_qr": true,
-  "qr_mode": "text",
+  "qr_mode": "link",
   "qr_max_chars": 300,
   "qr_render": "native",
   "qr_image_pixels": 192,
@@ -85,10 +85,10 @@ Termal fiş şablonu:
 
 - Başlık varsayılanı `Yakut Dedektörü`
 - PDF rapor metni
-- QR kod (`qr_mode=text` ise rapor özeti metni, `qr_mode=link` ise rapor linki veya dosya adı)
+- QR kod (`qr_mode=link` ile rapor linki veya dosya adı)
 - Personel imzası alanı
 
-QR baskısı varsayılan olarak `qr_render=native` ile gönderilir. PT-210 ilk testlerde native QR komutuyla daha okunaklı sonuç vermiştir. `qr_mode=text` açıkken QR içine tüm rapor değil, okunabilirliği korumak için kısa rapor özeti yazılır.
+QR baskısı varsayılan olarak `qr_render=native` ile gönderilir. PT-210 ilk testlerde native QR komutuyla link/dosya adı içerirken en stabil sonucu vermiştir.
 
 ```bash
 curl -X POST http://127.0.0.1:8096/api/thermal/print_report \

@@ -28,7 +28,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.4.2"
+API_VERSION = "1.4.3"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -45,7 +45,7 @@ DEFAULT_CONFIG = {
     "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
     "receipt_title": "Yakut Dedektörü",
     "print_qr": True,
-    "qr_mode": "text",
+    "qr_mode": "link",
     "qr_max_chars": 300,
     "qr_render": "native",
     "qr_image_pixels": 192,
@@ -727,7 +727,7 @@ def compact_qr_text(receipt_text, config, payload):
 def qr_data_for_receipt(payload, config, receipt_text):
     if not config.get("print_qr", True):
         return ""
-    mode = str(config.get("qr_mode") or "text").strip().lower()
+    mode = str(config.get("qr_mode") or "link").strip().lower()
     if mode == "link":
         return qr_data_from_payload(payload)
 

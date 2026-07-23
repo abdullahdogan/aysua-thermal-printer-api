@@ -33,7 +33,7 @@ if [ ! -f "${INSTALL_DIR}/config.json" ]; then
   "saved_scans_dir": "/home/pmroot/AysuaSpect/files/saved_scans",
   "receipt_title": "Yakut Dedektörü",
   "print_qr": true,
-  "qr_mode": "text",
+  "qr_mode": "link",
   "qr_max_chars": 300,
   "qr_render": "native",
   "qr_image_pixels": 192,
