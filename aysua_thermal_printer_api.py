@@ -20,6 +20,7 @@ import time
 import select
 import tempfile
 import urllib.request
+import glob
 
 
 HOST = os.getenv("THERMAL_API_HOST", "0.0.0.0")
@@ -28,7 +29,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.4.3"
+API_VERSION = "1.5.0"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -49,6 +50,9 @@ DEFAULT_CONFIG = {
     "qr_max_chars": 300,
     "qr_render": "native",
     "qr_image_pixels": 192,
+    "print_graph": True,
+    "graph_max_width_px": 384,
+    "graph_max_height_px": 320,
     "signature_space": True,
 }
 
@@ -115,6 +119,9 @@ def load_config():
     config["copies"] = max(1, int(config.get("copies") or 1))
     config["turkish_ascii"] = bool(config.get("turkish_ascii", True))
     config["qr_image_pixels"] = max(120, min(320, int(config.get("qr_image_pixels") or 192)))
+    config["print_graph"] = bool(config.get("print_graph", True))
+    config["graph_max_width_px"] = max(120, min(576, int(config.get("graph_max_width_px") or 384)))
+    config["graph_max_height_px"] = max(80, min(900, int(config.get("graph_max_height_px") or 320)))
     return config
 
 
@@ -134,7 +141,11 @@ def save_config(updates):
             value = max(120, min(2500, int(value)))
         if key == "qr_image_pixels":
             value = max(120, min(320, int(value)))
-        if key in {"enabled", "turkish_ascii", "print_qr", "signature_space"}:
+        if key == "graph_max_width_px":
+            value = max(120, min(576, int(value)))
+        if key == "graph_max_height_px":
+            value = max(80, min(900, int(value)))
+        if key in {"enabled", "turkish_ascii", "print_qr", "print_graph", "signature_space"}:
             value = bool(value)
         config[key] = value
     ensure_config_dir()
@@ -485,6 +496,69 @@ def escpos_qr_bytes(qr_data, size=5):
     ])
 
 
+def escpos_image_bytes(img, config, max_width_px=None, max_height_px=None, center_image=True, trim_whitespace=True):
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return b""
+
+    chars = max(24, min(48, int(config.get("chars_per_line") or 32)))
+    paper_pixels = 384 if chars <= 32 else 576
+    max_width = max(120, min(paper_pixels, int(max_width_px or config.get("graph_max_width_px") or paper_pixels)))
+    max_height = max(80, min(900, int(max_height_px or config.get("graph_max_height_px") or 320)))
+
+    if img.mode in {"RGBA", "LA"}:
+        background = Image.new("RGBA", img.size, "WHITE")
+        background.alpha_composite(img.convert("RGBA"))
+        img = background.convert("RGB")
+    else:
+        img = img.convert("RGB")
+
+    grayscale = ImageOps.autocontrast(img.convert("L"))
+    if trim_whitespace:
+        bbox = ImageOps.invert(grayscale).getbbox()
+        if bbox:
+            grayscale = grayscale.crop(bbox)
+
+    scale = min(max_width / max(1, grayscale.width), max_height / max(1, grayscale.height), 1.0)
+    if scale < 1.0:
+        new_size = (
+            max(1, int(round(grayscale.width * scale))),
+            max(1, int(round(grayscale.height * scale))),
+        )
+        grayscale = grayscale.resize(new_size, Image.Resampling.LANCZOS)
+
+    # Thermal printers are monochrome. A high threshold keeps colored graph
+    # lines and labels visible while leaving the white page background clean.
+    mono = grayscale.point(lambda px: 0 if px < 225 else 255, "1")
+
+    width = mono.width
+    height = mono.height
+    left_pad = max(0, (paper_pixels - width) // 2) if center_image else 0
+    total_width = width + left_pad
+    width_bytes = (total_width + 7) // 8
+    raster = bytearray(width_bytes * height)
+    px = mono.load()
+
+    for y in range(height):
+        for x in range(width):
+            if px[x, y] == 0:
+                tx = x + left_pad
+                idx = y * width_bytes + (tx // 8)
+                raster[idx] |= 0x80 >> (tx % 8)
+
+    x_l = width_bytes % 256
+    x_h = width_bytes // 256
+    y_l = height % 256
+    y_h = height // 256
+    return b"".join([
+        b"\n",
+        b"\x1b\x61\x00",
+        b"\x1d\x76\x30\x00" + bytes([x_l, x_h, y_l, y_h]) + bytes(raster),
+        b"\n",
+    ])
+
+
 def escpos_qr_image_bytes(qr_data, config):
     value = str(qr_data or "").strip()
     if not value:
@@ -509,41 +583,25 @@ def escpos_qr_image_bytes(qr_data, config):
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white").convert("1")
     img = img.resize((target, target), Image.Resampling.NEAREST)
-
-    width = img.width
-    height = img.height
-    left_pad = max(0, (paper_pixels - width) // 2)
-    total_width = width + left_pad
-    width_bytes = (total_width + 7) // 8
-    raster = bytearray(width_bytes * height)
-    px = img.load()
-
-    for y in range(height):
-        for x in range(width):
-            if px[x, y] == 0:
-                tx = x + left_pad
-                idx = y * width_bytes + (tx // 8)
-                raster[idx] |= 0x80 >> (tx % 8)
-
-    x_l = width_bytes % 256
-    x_h = width_bytes // 256
-    y_l = height % 256
-    y_h = height // 256
-    return b"".join([
-        b"\n",
-        b"\x1b\x61\x00",
-        b"\x1d\x76\x30\x00" + bytes([x_l, x_h, y_l, y_h]) + bytes(raster),
-        b"\n",
-    ])
+    return escpos_image_bytes(
+        img,
+        config,
+        max_width_px=paper_pixels,
+        max_height_px=target,
+        center_image=True,
+        trim_whitespace=False,
+    )
 
 
-def escpos_bytes_from_text(text, config, qr_data="", footer_text=""):
+def escpos_bytes_from_text(text, config, qr_data="", footer_text="", extra_bytes=b""):
     init = b"\x1b\x40"
     align_left = b"\x1b\x61\x00"
     body = escpos_text_body_bytes(text, config)
     footer = escpos_text_body_bytes(footer_text, config) if footer_text else b""
     feed_cut = b"\n\n\n\x1d\x56\x00"
     parts = [init, align_left, body]
+    if extra_bytes:
+        parts.append(extra_bytes)
     if qr_data:
         if str(config.get("qr_render") or "image").strip().lower() == "native":
             parts.append(escpos_qr_bytes(qr_data, config.get("qr_size", 5)))
@@ -570,19 +628,10 @@ def safe_filename(name):
     return raw
 
 
-def extract_pdf_text_with_pdftotext(pdf_path):
-    if shutil.which("pdftotext") is None:
-        return ""
-    code, out, err = run_cmd(["pdftotext", "-layout", pdf_path, "-"], timeout=20)
-    if code != 0:
-        return ""
-    return out
-
-
-def read_local_pdf_text(file_name, config):
+def local_pdf_candidates(file_name, config):
     name = safe_filename(file_name)
     if not name:
-        return ""
+        return []
     base_dir = str(config.get("saved_scans_dir") or "").strip()
     candidates = []
     if base_dir:
@@ -593,7 +642,20 @@ def read_local_pdf_text(file_name, config):
         os.path.join("/opt/AysuaSpect/files/saved_scans", name),
         os.path.join("/opt/aysua/files/saved_scans", name),
     ])
-    for path in candidates:
+    return candidates
+
+
+def extract_pdf_text_with_pdftotext(pdf_path):
+    if shutil.which("pdftotext") is None:
+        return ""
+    code, out, err = run_cmd(["pdftotext", "-layout", pdf_path, "-"], timeout=20)
+    if code != 0:
+        return ""
+    return out
+
+
+def read_local_pdf_text(file_name, config):
+    for path in local_pdf_candidates(file_name, config):
         if path and os.path.exists(path) and os.path.isfile(path):
             text = extract_pdf_text_with_pdftotext(path)
             if text:
@@ -601,7 +663,7 @@ def read_local_pdf_text(file_name, config):
     return ""
 
 
-def download_pdf_text(url):
+def download_pdf_to_temp(url):
     if not url:
         return ""
     parsed = str(url).strip()
@@ -615,14 +677,137 @@ def download_pdf_text(url):
             data = resp.read(8 * 1024 * 1024)
         with open(tmp_path, "wb") as fh:
             fh.write(data)
-        return extract_pdf_text_with_pdftotext(tmp_path)
+        return tmp_path
     except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
         return ""
+
+
+def download_pdf_text(url):
+    tmp_path = download_pdf_to_temp(url)
+    if not tmp_path:
+        return ""
+    try:
+        return extract_pdf_text_with_pdftotext(tmp_path)
     finally:
         try:
             os.remove(tmp_path)
         except OSError:
             pass
+
+
+def first_existing_pdf_path_from_payload(payload, config):
+    for path in payload.get("pdf_paths") or []:
+        value = str(path or "").strip()
+        if value and os.path.exists(value) and os.path.isfile(value):
+            return value, False
+
+    files = payload.get("files")
+    if not isinstance(files, list):
+        files = [payload.get("file")] if payload.get("file") else []
+    for file_name in files:
+        for path in local_pdf_candidates(file_name, config):
+            if path and os.path.exists(path) and os.path.isfile(path):
+                return path, False
+
+    for url in payload.get("pdf_urls") or []:
+        tmp_path = download_pdf_to_temp(url)
+        if tmp_path:
+            return tmp_path, True
+
+    return "", False
+
+
+def extract_embedded_pdf_images(pdf_path):
+    if shutil.which("pdfimages") is None:
+        return []
+    temp_dir = tempfile.mkdtemp(prefix="aysua-pdf-images-")
+    prefix = os.path.join(temp_dir, "img")
+    try:
+        code, out, err = run_cmd(["pdfimages", "-png", "-f", "1", "-l", "1", pdf_path, prefix], timeout=30)
+        if code != 0:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return []
+        paths = glob.glob(os.path.join(temp_dir, "*.png"))
+        if not paths:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return paths
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return []
+
+
+def choose_likely_graph_image(image_paths):
+    if not image_paths:
+        return ""
+    try:
+        from PIL import Image
+    except Exception:
+        return ""
+
+    best_path = ""
+    best_score = 0
+    for path in image_paths:
+        try:
+            with Image.open(path) as img:
+                width, height = img.size
+        except Exception:
+            continue
+        if width < 120 or height < 70:
+            continue
+        aspect = width / max(1, height)
+        if aspect < 0.8 or aspect > 6.0:
+            continue
+        score = width * height
+        if score > best_score:
+            best_score = score
+            best_path = path
+    return best_path
+
+
+def graph_escpos_bytes_from_payload(payload, config):
+    if not config.get("print_graph", True):
+        return b""
+    pdf_path, should_delete_pdf = first_existing_pdf_path_from_payload(payload, config)
+    if not pdf_path:
+        return b""
+
+    image_paths = []
+    try:
+        image_paths = extract_embedded_pdf_images(pdf_path)
+        graph_path = choose_likely_graph_image(image_paths)
+        if not graph_path:
+            return b""
+
+        try:
+            from PIL import Image
+        except Exception:
+            return b""
+
+        with Image.open(graph_path) as img:
+            image_bytes = escpos_image_bytes(
+                img,
+                config,
+                max_width_px=config.get("graph_max_width_px") or 384,
+                max_height_px=config.get("graph_max_height_px") or 320,
+                center_image=True,
+                trim_whitespace=True,
+            )
+        if not image_bytes:
+            return b""
+        label = escpos_text_body_bytes("\nGrafik:\n", config)
+        return b"".join([label, image_bytes])
+    finally:
+        if image_paths:
+            shutil.rmtree(os.path.dirname(image_paths[0]), ignore_errors=True)
+        if should_delete_pdf:
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
 
 
 def clean_pdf_text_for_receipt(text):
@@ -788,9 +973,15 @@ def build_report_text(payload, config):
     return "\n".join(lines)
 
 
-def write_to_printer(text, config, qr_data="", footer_text=""):
+def write_to_printer(text, config, qr_data="", footer_text="", extra_bytes=b""):
     prepare_printer(config)
-    data = escpos_bytes_from_text(text, config, qr_data=qr_data, footer_text=footer_text)
+    data = escpos_bytes_from_text(
+        text,
+        config,
+        qr_data=qr_data,
+        footer_text=footer_text,
+        extra_bytes=extra_bytes,
+    )
     path = config.get("device_path") or "/dev/rfcomm0"
     try:
         with open(path, "wb", buffering=0) as fh:
@@ -918,10 +1109,21 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/thermal/print_report":
                 config = load_config()
                 text = build_report_text(payload, config)
+                graph_bytes = graph_escpos_bytes_from_payload(payload, config)
                 qr_data = qr_data_for_receipt(payload, config, text)
                 footer = signature_footer(config)
-                write_to_printer(text, config, qr_data=qr_data, footer_text=footer)
-                self._send(200, {"ok": True, "message": "Report sent"})
+                write_to_printer(
+                    text,
+                    config,
+                    qr_data=qr_data,
+                    footer_text=footer,
+                    extra_bytes=graph_bytes,
+                )
+                self._send(200, {
+                    "ok": True,
+                    "message": "Report sent",
+                    "graph_printed": bool(graph_bytes),
+                })
             else:
                 self._send(404, {"ok": False, "error": "Not found"})
         except Exception as exc:

@@ -37,6 +37,9 @@ if [ ! -f "${INSTALL_DIR}/config.json" ]; then
   "qr_max_chars": 300,
   "qr_render": "native",
   "qr_image_pixels": 192,
+  "print_graph": true,
+  "graph_max_width_px": 384,
+  "graph_max_height_px": 320,
   "signature_space": true
 }
 JSON
