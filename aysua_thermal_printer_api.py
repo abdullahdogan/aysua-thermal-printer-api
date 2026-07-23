@@ -28,7 +28,7 @@ CONFIG_PATH = os.getenv(
     "THERMAL_CONFIG_PATH",
     "/opt/aysua-thermal-printer-api/config.json",
 )
-API_VERSION = "1.4.1"
+API_VERSION = "1.4.2"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -46,8 +46,8 @@ DEFAULT_CONFIG = {
     "receipt_title": "Yakut Dedektörü",
     "print_qr": True,
     "qr_mode": "text",
-    "qr_max_chars": 900,
-    "qr_render": "image",
+    "qr_max_chars": 300,
+    "qr_render": "native",
     "qr_image_pixels": 192,
     "signature_space": True,
 }
@@ -691,6 +691,39 @@ def qr_data_from_payload(payload):
     return ""
 
 
+def compact_qr_text(receipt_text, config, payload):
+    title = normalize_for_thermal_text(receipt_title(payload, config), config)
+    wanted = [
+        "scan id", "scan result", "sonuc", "sonuç", "scan mode", "mod",
+        "user", "kullanici", "kullanıcı", "unit", "date", "tarih", "time", "saat"
+    ]
+    lines = []
+    for raw in clean_pdf_text_for_receipt(receipt_text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        norm = line.lower()
+        if any(key in norm for key in wanted):
+            lines.append(line)
+        if len(lines) >= 8:
+            break
+
+    if not lines:
+        fallback = []
+        if payload.get("date"):
+            fallback.append(f"Tarih: {payload.get('date')}")
+        if payload.get("user"):
+            fallback.append(f"Kullanici: {payload.get('user')}")
+        if payload.get("mode"):
+            fallback.append(f"Mod: {payload.get('mode')}")
+        if payload.get("result"):
+            fallback.append(f"Sonuc: {payload.get('result')}")
+        lines = fallback
+
+    text = "\n".join([title] + lines).strip()
+    return normalize_for_thermal_text(text, config)
+
+
 def qr_data_for_receipt(payload, config, receipt_text):
     if not config.get("print_qr", True):
         return ""
@@ -698,12 +731,7 @@ def qr_data_for_receipt(payload, config, receipt_text):
     if mode == "link":
         return qr_data_from_payload(payload)
 
-    title = receipt_title(payload, config)
-    text = clean_pdf_text_for_receipt(receipt_text or "")
-    # Do not duplicate the title too aggressively if it already exists.
-    if title and title not in text:
-        text = f"{title}\n{text}".strip()
-    text = normalize_for_thermal_text(text, config)
+    text = compact_qr_text(receipt_text, config, payload)
     max_chars = max(120, min(2500, int(config.get("qr_max_chars") or 900)))
     if len(text) > max_chars:
         text = text[: max_chars - 3].rstrip() + "..."

@@ -58,8 +58,8 @@ Kurulumdan sonra:
   "receipt_title": "Yakut Dedektörü",
   "print_qr": true,
   "qr_mode": "text",
-  "qr_max_chars": 900,
-  "qr_render": "image",
+  "qr_max_chars": 300,
+  "qr_render": "native",
   "qr_image_pixels": 192,
   "signature_space": true
 }
@@ -88,7 +88,7 @@ Termal fiş şablonu:
 - QR kod (`qr_mode=text` ise rapor özeti metni, `qr_mode=link` ise rapor linki veya dosya adı)
 - Personel imzası alanı
 
-QR baskısı varsayılan olarak `qr_render=image` ile küçük raster görsel olarak gönderilir. Bu yöntem, native ESC/POS QR komutunu desteklemeyen PT-210 türevlerinde daha uyumludur. İstenirse config içinde `qr_render=native` yapılabilir.
+QR baskısı varsayılan olarak `qr_render=native` ile gönderilir. PT-210 ilk testlerde native QR komutuyla daha okunaklı sonuç vermiştir. `qr_mode=text` açıkken QR içine tüm rapor değil, okunabilirliği korumak için kısa rapor özeti yazılır.
 
 ```bash
 curl -X POST http://127.0.0.1:8096/api/thermal/print_report \

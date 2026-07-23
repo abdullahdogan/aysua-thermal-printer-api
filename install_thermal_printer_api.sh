@@ -34,8 +34,8 @@ if [ ! -f "${INSTALL_DIR}/config.json" ]; then
   "receipt_title": "Yakut Dedektörü",
   "print_qr": true,
   "qr_mode": "text",
-  "qr_max_chars": 900,
-  "qr_render": "image",
+  "qr_max_chars": 300,
+  "qr_render": "native",
   "qr_image_pixels": 192,
   "signature_space": true
 }
